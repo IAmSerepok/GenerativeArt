@@ -1,0 +1,1235 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Particle Animation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: hwb(222 6% 84%);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            position: relative;
+            width: 100%;
+            height: 100vh;
+        }
+
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+        }
+        
+        .controls {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 100;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            background: rgba(15, 23, 42, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            border: 2px solid #3b82f6;
+            max-width: 300px;
+        }
+        
+        button {
+            padding: 10px 15px;
+            background: rgba(59, 130, 246, 0.8);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: Arial, sans-serif;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background: rgba(59, 130, 246, 1);
+            transform: translateY(-2px);
+        }
+        
+        button:disabled {
+            background: rgba(107, 114, 128, 0.8);
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .recording {
+            animation: pulse 1s infinite;
+        }
+        
+        @keyframes pulse {
+            0% { background: rgba(239, 68, 68, 0.8); }
+            50% { background: rgba(239, 68, 68, 0.5); }
+            100% { background: rgba(239, 68, 68, 0.8); }
+        }
+        
+        .settings {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(255, 255, 255, 0.2);
+        }
+        
+        .setting-item {
+            margin-bottom: 8px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        label {
+            color: white;
+            font-size: 12px;
+            font-family: Arial, sans-serif;
+        }
+        
+        input[type="number"] {
+            width: 70px;
+            padding: 4px;
+            border-radius: 3px;
+            border: 1px solid #3b82f6;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            text-align: center;
+        }
+        
+        #status {
+            color: white;
+            font-size: 12px;
+            margin-top: 10px;
+            text-align: center;
+            font-family: Arial, sans-serif;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <canvas id="canvas"></canvas>
+    </div>
+    
+    <div class="controls">
+        <button id="startRecording">Начать запись</button>
+        <button id="stopRecording" disabled>Остановить запись</button>
+        <button id="downloadAll">Скачать все кадры</button>
+        
+        <div class="settings">
+            <div class="setting-item">
+                <label for="frameSkip">Пропуск кадров:</label>
+                <input type="number" id="frameSkip" value="1" min="1" max="10">
+            </div>
+            <div class="setting-item">
+                <label for="fps">Целевой FPS:</label>
+                <input type="number" id="fps" value="60" min="1" max="120">
+            </div>
+            <div id="status">
+                Кадр: <span id="currentFrame">0</span> | 
+                Фаза: <span id="currentPhaseName">FLYING</span>
+            </div>
+        </div>
+        
+        <div id="recordingStatus" style="color: white; margin-top: 10px; display: none;">
+            Запись: <span id="frameCount">0</span> кадров
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        
+        // Элементы управления
+        const startRecordingBtn = document.getElementById('startRecording');
+        const stopRecordingBtn = document.getElementById('stopRecording');
+        const downloadAllBtn = document.getElementById('downloadAll');
+        const recordingStatus = document.getElementById('recordingStatus');
+        const frameCountDisplay = document.getElementById('frameCount');
+        const frameSkipInput = document.getElementById('frameSkip');
+        const fpsInput = document.getElementById('fps');
+        const currentFrameDisplay = document.getElementById('currentFrame');
+        const currentPhaseDisplay = document.getElementById('currentPhaseName');
+        const statusDisplay = document.getElementById('status');
+        
+        // Переменные для записи
+        let isRecording = false;
+        let recordedFrames = [];
+        let frameNumber = 0;
+        let frameSkip = 1;
+        
+        // Переменные для управления временем
+        let animationFrameCount = 0; // Счетчик кадров анимации
+        let lastFrameTime = 0;
+        let fps = 60;
+        let frameInterval = 1000 / fps; // Интервал между кадрами в мс
+        
+        function resizeCanvas() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        
+        resizeCanvas();
+        window.addEventListener('resize', resizeCanvas);
+        
+        const PARTICLE_COUNT = 3500;
+        const ATTRACTION_RADIUS = 1000;
+        const FRICTION = 0.98;
+        const MIN_DISTANCE = 8; // Уменьшаем минимальное расстояние
+        
+        const COLOR_SCHEMES = {
+            MATH: [
+                '#3b82f6', // Синий
+                '#06b6d4', // Голубой
+                '#10b981', // Зеленый
+                '#f59e0b', // Желтый
+                '#ef4444', // Красный
+                '#ec4899'  // Розовый
+            ],
+            CODE: [
+                '#10b981', // Зеленый
+                '#f59e0b', // Желтый
+                '#ef4444'  // Красный
+            ],
+            ART: [
+                '#10b981', // Зеленый
+                '#f59e0b', // Желтый
+                '#ef4444', // Красный
+                '#ffffff', // Белый
+                '#a855f7', // Пурпурный
+                '#06b6d6'  // Голубой
+            ],
+            LISSAJOUS: [
+                '#3b82f6', // Синий
+                '#8b5cf6', // Фиолетовый
+                '#06b6d4'  // Голубой
+            ],
+            SPIRAL: [
+                '#ec4899', // Розовый
+                '#8b5cf6', // Фиолетовый
+                '#f59e0b'  // Желтый
+            ]
+        };
+        
+        const PHASES = {
+            FLYING: 0,
+            MATH_FORM: 1,
+            MATH_HOLD: 2,
+            MATH_TO_LISSAJOUS: 3,
+            LISSAJOUS_FORM: 4,
+            LISSAJOUS_HOLD: 5,
+            LISSAJOUS_TO_CODE: 6,
+            CODE_FORM: 7,
+            CODE_HOLD: 8,
+            CODE_TO_SPIRAL: 9,
+            SPIRAL_FORMATION: 10,
+            SPIRAL_ROTATION: 11,
+            SPIRAL_TO_ART: 12,
+            ART_FORMATION: 13,
+            ART_HOLD: 14
+        };
+        
+        const PHASE_NAMES = {
+            [PHASES.FLYING]: "FLYING",
+            [PHASES.MATH_FORM]: "MATH_FORM",
+            [PHASES.MATH_HOLD]: "MATH_HOLD",
+            [PHASES.MATH_TO_LISSAJOUS]: "MATH_TO_LISSAJOUS",
+            [PHASES.LISSAJOUS_FORM]: "LISSAJOUS_FORM",
+            [PHASES.LISSAJOUS_HOLD]: "LISSAJOUS_HOLD",
+            [PHASES.LISSAJOUS_TO_CODE]: "LISSAJOUS_TO_CODE",
+            [PHASES.CODE_FORM]: "CODE_FORM",
+            [PHASES.CODE_HOLD]: "CODE_HOLD",
+            [PHASES.CODE_TO_SPIRAL]: "CODE_TO_SPIRAL",
+            [PHASES.SPIRAL_FORMATION]: "SPIRAL_FORMATION",
+            [PHASES.SPIRAL_ROTATION]: "SPIRAL_ROTATION",
+            [PHASES.SPIRAL_TO_ART]: "SPIRAL_TO_ART",
+            [PHASES.ART_FORMATION]: "ART_FORMATION",
+            [PHASES.ART_HOLD]: "ART_HOLD"
+        };
+        
+        let currentPhase = PHASES.FLYING;
+        let phaseStartFrame = 0; // Начинаем фазу с этого кадра
+        let animationRunning = true;
+        let awaitingClick = false;
+        
+        // Настройка длительности фаз в КАДРАХ (не в миллисекундах)
+        const PHASE_DURATIONS_FRAMES = {
+            [PHASES.FLYING]: 180,         // 3 секунды при 60 FPS
+            [PHASES.MATH_FORM]: 120,      // 2 секунд
+            [PHASES.MATH_HOLD]: 90,      // 1.5 секунды
+            [PHASES.MATH_TO_LISSAJOUS]: 120, // 2 секунды
+            [PHASES.LISSAJOUS_FORM]: 180, // 3 секунд
+            [PHASES.LISSAJOUS_HOLD]: 300, // 5 секунд
+            [PHASES.LISSAJOUS_TO_CODE]: 90, // 1.5 секунды
+            [PHASES.CODE_FORM]: 120,      // 2 секунды
+            [PHASES.CODE_HOLD]: 120,      // 2 секунды
+            [PHASES.CODE_TO_SPIRAL]: 300, // 2 секунды
+            [PHASES.SPIRAL_FORMATION]: 240, // 3 секунды
+            [PHASES.SPIRAL_ROTATION]: 240, // 4 секунд
+            [PHASES.SPIRAL_TO_ART]: 240,  // 3 секунды
+            [PHASES.ART_FORMATION]: 180,  // 3 секунд
+            [PHASES.ART_HOLD]: Infinity   // Бесконечно до клика
+        };
+        
+        class Particle {
+            constructor(x, y, direction, index) {
+                this.x = x;
+                this.y = y;
+                this.originalX = x;
+                this.originalY = y;
+                this.direction = direction;
+                this.index = index;
+                this.totalParticles = PARTICLE_COUNT;
+                
+                this.resetColors();
+                this.resetTargets();
+                
+                this.setInitialVelocity(direction);
+                
+                this.radius = Math.random() * 1.5 + 1; // Уменьшаем разброс радиуса
+                this.stuck = false;
+                this.attracted = false;
+                this.baseRadius = this.radius;
+                this.pulseSpeed = Math.random() * 0.05 + 0.02;
+                this.pulseOffset = Math.random() * Math.PI * 2;
+                this.active = true;
+                
+                // Инициализация параметров для кривой Лиссажу
+                this.lissajousAngle = (index / this.totalParticles) * Math.PI * 4;
+                this.lissajousSpeed = 0.003 + Math.random() * 0.001; // Уменьшаем скорость
+                this.lissajousA = 2.0;
+                this.lissajousB = 3.0;
+                this.lissajousDelta = 3 * Math.PI / 4; 
+                this.lissajousDeltaTarget = 3 * Math.PI / 4; 
+                this.lissajousDeltaSpeed = 0.003; 
+                
+                this.spiralAngle = (index / this.totalParticles) * Math.PI * 2;
+                this.spiralSpeed = 0.015 + Math.random() * 0.01;
+                
+                this.explosionForce = 0;
+                this.explosionAngle = 0;
+                
+                this.transitionProgress = 0;
+                this.lastSpiralPosition = { x: 0, y: 0 };
+                
+                this.artTarget = { x: 0, y: 0 };
+                
+                // Для Art формы - усиленное притяжение
+                this.artStuck = false;
+            }
+            
+            resetColors() {
+                this.mathColor = this.getRandomColor('MATH');
+                this.codeColor = this.getRandomColor('CODE');
+                this.artColor = this.getRandomColor('ART');
+                this.lissajousColor = this.getRandomColor('LISSAJOUS');
+                this.spiralColor = this.getRandomColor('SPIRAL');
+                this.currentColor = this.mathColor;
+            }
+            
+            resetTargets() {
+                this.mathTarget = { x: 0, y: 0 };
+                this.codeTarget = { x: 0, y: 0 };
+                this.artTarget = { x: 0, y: 0 };
+                this.lissajousTarget = { x: 0, y: 0 };
+                this.spiralTarget = { x: 0, y: 0 };
+                this.currentTarget = { x: 0, y: 0 };
+            }
+            
+            getRandomColor(scheme) {
+                const colors = COLOR_SCHEMES[scheme];
+                return colors[Math.floor(Math.random() * colors.length)];
+            }
+            
+            setInitialVelocity(direction) {
+                const speed = Math.random() * 2 + 1;
+                
+                switch(direction) {
+                    case 'top':
+                        this.vx = (Math.random() - 0.5) * 2;
+                        this.vy = Math.random() * 2 + 1;
+                        break;
+                    case 'bottom':
+                        this.vx = (Math.random() - 0.5) * 2;
+                        this.vy = -(Math.random() * 2 + 1);
+                        break;
+                    case 'left':
+                        this.vx = Math.random() * 2 + 1;
+                        this.vy = (Math.random() - 0.5) * 2;
+                        break;
+                    case 'right':
+                        this.vx = -(Math.random() * 2 + 1);
+                        this.vy = (Math.random() - 0.5) * 2;
+                        break;
+                    case 'top-left':
+                        this.vx = Math.random() * 1.5 + 0.5;
+                        this.vy = Math.random() * 1.5 + 0.5;
+                        break;
+                    case 'top-right':
+                        this.vx = -(Math.random() * 1.5 + 0.5);
+                        this.vy = Math.random() * 1.5 + 0.5;
+                        break;
+                    case 'bottom-left':
+                        this.vx = Math.random() * 1.5 + 0.5;
+                        this.vy = -(Math.random() * 1.5 + 0.5);
+                        break;
+                    case 'bottom-right':
+                        this.vx = -(Math.random() * 1.5 + 0.5);
+                        this.vy = -(Math.random() * 1.5 + 0.5);
+                        break;
+                    default:
+                        this.vx = (Math.random() - 0.5) * 3;
+                        this.vy = (Math.random() - 0.5) * 3;
+                }
+            }
+            
+            calculateLissajousPoint(frameCount) {
+                const centerX = canvas.width / 2;
+                const centerY = canvas.height / 2;
+                const scale = Math.min(canvas.width, canvas.height) * 0.05; // Уменьшаем масштаб с 0.5 до 0.2
+                
+                // Используем frameCount вместо времени, но с меньшим множителем
+                const t = this.lissajousAngle + frameCount * this.lissajousSpeed;
+                
+                // Медленное изменение дельты
+                this.lissajousDelta += this.lissajousDeltaSpeed;
+                if (this.lissajousDelta > Math.PI * 2) {
+                    this.lissajousDelta -= Math.PI * 2;
+                }
+                
+                // Формула кривой Лиссажу: x = sin(a*t + delta), y = sin(b*t)
+                const x = centerX + Math.pow(5, Math.pow(Math.sin(t), 15)) * Math.cos(t + this.lissajousDelta) * scale;
+                const y = centerY + Math.pow(5, Math.pow(Math.sin(t), 15)) * Math.sin(t + this.lissajousDelta) * scale;
+                
+                return { x, y };
+            }
+                    
+            calculateLogarithmicSpiralPoint(frameCount, phaseFrame) {
+                const centerX = canvas.width / 2;
+                const centerY = canvas.height / 2;
+                const maxRadius = Math.min(canvas.width, canvas.height) * 0.35;
+                
+                let spiralProgress = 1;
+                if (currentPhase === PHASES.SPIRAL_FORMATION) {
+                    const phaseDuration = PHASE_DURATIONS_FRAMES[PHASES.SPIRAL_FORMATION];
+                    spiralProgress = Math.min(1, phaseFrame / phaseDuration);
+                }
+                
+                const angle = this.spiralAngle;
+                const a = 0;
+                const b = 1;
+                
+                const r = Math.pow(5, Math.pow(Math.sin(angle + Math.PI), 15)) * spiralProgress * (maxRadius / 5);
+                const limitedR = Math.min(r, maxRadius);
+                
+                const x = centerX + Math.cos(angle) * limitedR;
+                const y = centerY + Math.sin(angle) * limitedR;
+                
+                this.spiralAngle += 0.01;
+                
+                this.lastSpiralPosition = { x, y };
+                return { x, y };
+            }
+            
+            applyExplosionForce(phaseFrame, maxFrames, forceMultiplier = 1) {
+                if (this.explosionForce === 0) {
+                    this.explosionForce = Math.random() * 4 + 3;
+                    this.explosionAngle = Math.random() * Math.PI * 2;
+                }
+                
+                const explosionProgress = Math.min(1, phaseFrame / maxFrames);
+                const force = this.explosionForce * explosionProgress * (1 - explosionProgress) * 4 * forceMultiplier;
+                
+                this.vx += Math.cos(this.explosionAngle) * force;
+                this.vy += Math.sin(this.explosionAngle) * force;
+            }
+            
+            update(frameCount, phaseFrame) {
+                if (currentPhase === PHASES.ART_HOLD && awaitingClick) {
+                    this.updatePulsation(frameCount);
+                    return;
+                }
+                
+                this.updateCurrentTarget(phaseFrame, frameCount);
+                
+                const dx = this.currentTarget.x - this.x;
+                const dy = this.currentTarget.y - this.y;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                this.handlePhase(frameCount, phaseFrame, distance, dx, dy);
+                
+                this.x += this.vx;
+                this.y += this.vy;
+                
+                this.updatePulsation(frameCount);
+                this.checkBoundaries();
+            }
+            
+            updateCurrentTarget(phaseFrame, frameCount) {
+                switch(currentPhase) {
+                    case PHASES.FLYING:
+                        this.currentTarget = this.mathTarget;
+                        this.currentColor = this.mathColor;
+                        break;
+                        
+                    case PHASES.MATH_FORM:
+                    case PHASES.MATH_HOLD:
+                        this.currentTarget = this.mathTarget;
+                        this.currentColor = this.mathColor;
+                        break;
+                        
+                    case PHASES.MATH_TO_LISSAJOUS:
+                        const transition1Duration = PHASE_DURATIONS_FRAMES[PHASES.MATH_TO_LISSAJOUS];
+                        this.transitionProgress = Math.min(1, phaseFrame / transition1Duration);
+                        this.lissajousTarget = this.calculateLissajousPoint(frameCount);
+                        this.currentTarget = {
+                            x: this.mathTarget.x * (1 - this.transitionProgress) + this.lissajousTarget.x * this.transitionProgress,
+                            y: this.mathTarget.y * (1 - this.transitionProgress) + this.lissajousTarget.y * this.transitionProgress
+                        };
+                        this.currentColor = this.mathColor;
+                        break;
+                        
+                    case PHASES.LISSAJOUS_FORM:
+                    case PHASES.LISSAJOUS_HOLD:
+                        this.lissajousTarget = this.calculateLissajousPoint(frameCount);
+                        this.currentTarget = this.lissajousTarget;
+                        this.currentColor = this.lissajousColor;
+                        break;
+                        
+                    case PHASES.LISSAJOUS_TO_CODE:
+                        const transition2Duration = PHASE_DURATIONS_FRAMES[PHASES.LISSAJOUS_TO_CODE];
+                        this.transitionProgress = Math.min(1, phaseFrame / transition2Duration);
+                        this.currentTarget = {
+                            x: this.lissajousTarget.x * (1 - this.transitionProgress) + this.codeTarget.x * this.transitionProgress,
+                            y: this.lissajousTarget.y * (1 - this.transitionProgress) + this.codeTarget.y * this.transitionProgress
+                        };
+                        this.currentColor = this.lissajousColor;
+                        break;
+                        
+                    case PHASES.CODE_FORM:
+                    case PHASES.CODE_HOLD:
+                        this.currentTarget = this.codeTarget;
+                        this.currentColor = this.codeColor;
+                        break;
+                        
+                    case PHASES.CODE_TO_SPIRAL:
+                        const transition3Duration = PHASE_DURATIONS_FRAMES[PHASES.CODE_TO_SPIRAL];
+                        this.transitionProgress = Math.min(1, phaseFrame / transition3Duration);
+                        this.spiralTarget = this.calculateLogarithmicSpiralPoint(frameCount, phaseFrame);
+                        this.currentTarget = {
+                            x: this.codeTarget.x * (1 - this.transitionProgress) + this.spiralTarget.x * this.transitionProgress,
+                            y: this.codeTarget.y * (1 - this.transitionProgress) + this.spiralTarget.y * this.transitionProgress
+                        };
+                        this.currentColor = this.codeColor;
+                        break;
+                        
+                    case PHASES.SPIRAL_FORMATION:
+                    case PHASES.SPIRAL_ROTATION:
+                        this.spiralTarget = this.calculateLogarithmicSpiralPoint(frameCount, phaseFrame);
+                        this.currentTarget = this.spiralTarget;
+                        
+                        const spiralProgress = currentPhase === PHASES.SPIRAL_FORMATION 
+                            ? Math.min(1, phaseFrame / PHASE_DURATIONS_FRAMES[PHASES.SPIRAL_FORMATION])
+                            : 1;
+                        
+                        this.currentColor = this.interpolateColor(this.codeColor, this.spiralColor, spiralProgress);
+                        break;
+                        
+                    case PHASES.SPIRAL_TO_ART:
+                        const transition4Duration = PHASE_DURATIONS_FRAMES[PHASES.SPIRAL_TO_ART];
+                        this.transitionProgress = Math.min(1, phaseFrame / transition4Duration);
+                        
+                        this.spiralTarget = this.calculateLogarithmicSpiralPoint(frameCount, phaseFrame);
+                        
+                        const startProgress = this.transitionProgress;
+                        
+                        this.currentTarget = {
+                            x: this.spiralTarget.x * (1 - startProgress) + this.artTarget.x * startProgress,
+                            y: this.spiralTarget.y * (1 - startProgress) + this.artTarget.y * startProgress
+                        };
+                        this.currentColor = this.interpolateColor(this.spiralColor, this.artColor, startProgress);
+                        break;
+                        
+                    case PHASES.ART_FORMATION:
+                        const formationDuration = PHASE_DURATIONS_FRAMES[PHASES.ART_FORMATION];
+                        this.transitionProgress = Math.min(1, phaseFrame / formationDuration);
+                        
+                        this.currentTarget = this.artTarget;
+                        this.currentColor = this.artColor;
+                        
+                        if (!this.attracted) {
+                            this.attracted = true;
+                        }
+                        break;
+                        
+                    case PHASES.ART_HOLD:
+                        this.currentTarget = this.artTarget;
+                        this.currentColor = this.artColor;
+                        break;
+                }
+            }
+            
+            interpolateColor(color1, color2, progress) {
+                return progress > 0.5 ? color2 : color1;
+            }
+            
+            handlePhase(frameCount, phaseFrame, distance, dx, dy) {
+                if (currentPhase === PHASES.FLYING) {
+                    this.attracted = false;
+                    this.stuck = false;
+                    this.vx *= 0.995;
+                    this.vy *= 0.995;
+                }
+                
+                if ([PHASES.MATH_FORM, PHASES.CODE_FORM].includes(currentPhase) && !this.stuck) {
+                    this.handleWordFormation(distance, dx, dy);
+                }
+                
+                if ([PHASES.MATH_TO_LISSAJOUS].includes(currentPhase)) {
+                    this.applyExplosionForce(phaseFrame, PHASE_DURATIONS_FRAMES[PHASES.MATH_TO_LISSAJOUS], 1.5);
+                    this.stuck = false;
+                    this.attracted = false;
+                }
+                
+                if ([PHASES.LISSAJOUS_FORM, PHASES.LISSAJOUS_HOLD].includes(currentPhase)) {
+                    this.handleLissajousMovement();
+                }
+                
+                if (currentPhase === PHASES.CODE_TO_SPIRAL) {
+                    this.stuck = false;
+                    this.attracted = false;
+                    if (distance > 2) {
+                        const force = 0.1;
+                        this.vx += (dx / distance) * force;
+                        this.vy += (dy / distance) * force;
+                        this.vx *= 0.95;
+                        this.vy *= 0.95;
+                    }
+                }
+                
+                if ([PHASES.SPIRAL_FORMATION, PHASES.SPIRAL_ROTATION, PHASES.SPIRAL_TO_ART].includes(currentPhase)) {
+                    this.handleSpiralMovement(distance, dx, dy);
+                }
+                
+                if (currentPhase === PHASES.ART_FORMATION && !this.stuck) {
+                    this.handleArtFormation(distance, dx, dy);
+                }
+            }
+            
+            handleWordFormation(distance, dx, dy) {
+                if (distance < ATTRACTION_RADIUS && !this.attracted) {
+                    this.attracted = true;
+                }
+                
+                if (this.attracted && distance > MIN_DISTANCE) {
+                    const force = 0.25;
+                    this.vx += (dx / distance) * force;
+                    this.vy += (dy / distance) * force;
+                    this.vx *= FRICTION;
+                    this.vy *= FRICTION;
+                }
+                
+                if (distance < MIN_DISTANCE && this.attracted) {
+                    this.stuck = true;
+                    this.x = this.currentTarget.x;
+                    this.y = this.currentTarget.y;
+                    this.vx = 0;
+                    this.vy = 0;
+                }
+            }
+            
+            handleArtFormation(distance, dx, dy) {
+                if (distance < ATTRACTION_RADIUS && !this.attracted) {
+                    this.attracted = true;
+                }
+                
+                if (this.attracted && distance > MIN_DISTANCE) {
+                    // Плавное притяжение для Art
+                    const force = 0.2 + (0.2 * this.transitionProgress); // Плавное увеличение силы
+                    this.vx += (dx / distance) * force;
+                    this.vy += (dy / distance) * force;
+                    this.vx *= 0.96; // Меньше трения для более быстрого движения
+                    this.vy *= 0.96;
+                }
+                
+                if (distance < MIN_DISTANCE && this.attracted) {
+                    this.stuck = true;
+                    this.x = this.currentTarget.x;
+                    this.y = this.currentTarget.y;
+                    this.vx = 0;
+                    this.vy = 0;
+                    this.artStuck = true;
+                }
+            }
+            
+            handleLissajousMovement() {
+                const lissajousDx = this.lissajousTarget.x - this.x;
+                const lissajousDy = this.lissajousTarget.y - this.y;
+                const lissajousDistance = Math.sqrt(lissajousDx * lissajousDx + lissajousDy * lissajousDy);
+                
+                if (lissajousDistance > 2) {
+                    // Увеличиваем силу притяжения для лучшего следования по кривой
+                    const lissajousForce = 0.08;
+                    this.vx += (lissajousDx / lissajousDistance) * lissajousForce;
+                    this.vy += (lissajousDy / lissajousDistance) * lissajousForce;
+                    this.vx *= 0.96; // Уменьшаем трение для более плавного движения
+                    this.vy *= 0.96;
+                }
+            }
+            
+            handleSpiralMovement(distance, dx, dy) {
+                if (distance > 5) {
+                    const force = 0.05;
+                    this.vx += (dx / distance) * force;
+                    this.vy += (dy / distance) * force;
+                    this.vx *= 0.97;
+                    this.vy *= 0.97;
+                }
+                
+                if (currentPhase === PHASES.SPIRAL_FORMATION && distance < 10) {
+                    this.stuck = true;
+                    this.vx *= 0.9;
+                    this.vy *= 0.9;
+                }
+            }
+            
+            updatePulsation(frameCount) {
+                // Используем Math.abs чтобы радиус всегда был положительным
+                let pulseValue = Math.sin(frameCount * this.pulseSpeed + this.pulseOffset);
+                
+                if (this.stuck || [PHASES.LISSAJOUS_FORM, PHASES.LISSAJOUS_HOLD, 
+                    PHASES.SPIRAL_FORMATION, PHASES.SPIRAL_ROTATION, PHASES.SPIRAL_TO_ART, 
+                    PHASES.ART_HOLD].includes(currentPhase)) {
+                    const pulseMultiplier = currentPhase === PHASES.ART_HOLD ? 0.8 : 0.4; // Уменьшаем амплитуду
+                    this.radius = Math.max(0.5, this.baseRadius + Math.abs(pulseValue) * pulseMultiplier);
+                }
+                
+                if ([PHASES.SPIRAL_FORMATION, PHASES.SPIRAL_ROTATION, PHASES.SPIRAL_TO_ART, PHASES.ART_FORMATION].includes(currentPhase)) {
+                    this.radius = Math.max(0.5, this.baseRadius + Math.abs(pulseValue) * 0.5); // Используем Math.abs
+                }
+            }
+            
+            checkBoundaries() {
+                const margin = 200;
+                if (this.x < -margin || this.x > canvas.width + margin || 
+                    this.y < -margin || this.y > canvas.height + margin) {
+                    this.x = canvas.width / 2;
+                    this.y = canvas.height / 2;
+                    this.vx = (Math.random() - 0.5) * 2;
+                    this.vy = (Math.random() - 0.5) * 2;
+                }
+            }
+            
+            draw() {
+                if (!this.active) return;
+                
+                // Гарантируем, что радиус не отрицательный
+                const drawRadius = Math.max(0.5, this.radius);
+                
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, drawRadius, 0, Math.PI * 2);
+                
+                const gradient = ctx.createRadialGradient(
+                    this.x, this.y, 0,
+                    this.x, this.y, drawRadius * 2.5
+                );
+                
+                if (this.stuck) {
+                    gradient.addColorStop(0, this.currentColor);
+                    gradient.addColorStop(0.7, this.currentColor + '80');
+                    gradient.addColorStop(1, this.currentColor + '00');
+                    ctx.globalAlpha = 0.9;
+                } else if ([PHASES.LISSAJOUS_FORM, PHASES.LISSAJOUS_HOLD].includes(currentPhase)) {
+                    gradient.addColorStop(0, this.currentColor);
+                    gradient.addColorStop(0.5, this.currentColor + 'a0');
+                    gradient.addColorStop(1, this.currentColor + '20');
+                    ctx.globalAlpha = 0.8;
+                } else if ([PHASES.SPIRAL_FORMATION, PHASES.SPIRAL_ROTATION, PHASES.SPIRAL_TO_ART].includes(currentPhase)) {
+                    gradient.addColorStop(0, this.currentColor);
+                    gradient.addColorStop(0.3, this.currentColor + 'c0');
+                    gradient.addColorStop(1, this.currentColor + '40');
+                    ctx.globalAlpha = 0.85;
+                } else if ([PHASES.ART_FORMATION, PHASES.ART_HOLD].includes(currentPhase)) {
+                    gradient.addColorStop(0, this.currentColor);
+                    gradient.addColorStop(0.5, this.currentColor + 'a0');
+                    gradient.addColorStop(1, this.currentColor + '20');
+                    ctx.globalAlpha = 0.9;
+                } else {
+                    gradient.addColorStop(0, this.currentColor);
+                    gradient.addColorStop(1, this.currentColor + '80');
+                    ctx.globalAlpha = 0.7;
+                }
+                
+                ctx.fillStyle = gradient;
+                ctx.fill();
+                ctx.globalAlpha = 1.0;
+            }
+            
+            reset() {
+                switch(this.direction) {
+                    case 'top':
+                        this.x = Math.random() * canvas.width;
+                        this.y = -50;
+                        break;
+                    case 'bottom':
+                        this.x = Math.random() * canvas.width;
+                        this.y = canvas.height + 50;
+                        break;
+                    case 'left':
+                        this.x = -50;
+                        this.y = Math.random() * canvas.height;
+                        break;
+                    case 'right':
+                        this.x = canvas.width + 50;
+                        this.y = Math.random() * canvas.height;
+                        break;
+                    case 'top-left':
+                        this.x = -50;
+                        this.y = -50;
+                        break;
+                    case 'top-right':
+                        this.x = canvas.width + 50;
+                        this.y = -50;
+                        break;
+                    case 'bottom-left':
+                        this.x = -50;
+                        this.y = canvas.height + 50;
+                        break;
+                    case 'bottom-right':
+                        this.x = canvas.width + 50;
+                        this.y = canvas.height + 50;
+                        break;
+                }
+                
+                this.originalX = this.x;
+                this.originalY = this.y;
+                this.setInitialVelocity(this.direction);
+                this.stuck = false;
+                this.attracted = false;
+                this.artStuck = false;
+                this.active = true;
+                this.explosionForce = 0;
+                this.transitionProgress = 0;
+                
+                this.lissajousAngle = (this.index / this.totalParticles) * Math.PI * 4;
+                this.lissajousSpeed = 0.003 + Math.random() * 0.001;
+                this.lissajousDelta = 0;
+                this.lissajousDeltaSpeed = 0.001;
+                
+                this.spiralAngle = (this.index / this.totalParticles) * Math.PI * 8;
+                
+                // Сбрасываем радиус
+                this.radius = Math.random() * 1.5 + 1;
+                this.baseRadius = this.radius;
+            }
+            
+            setMathTarget(x, y) { this.mathTarget = { x, y }; }
+            setCodeTarget(x, y) { this.codeTarget = { x, y }; }
+            setArtTarget(x, y) { this.artTarget = { x, y }; }
+        }
+        
+        function createTextPoints(text, size = 90) {
+            const points = [];
+            const centerX = canvas.width / 2;
+            const centerY = canvas.height / 2;
+            
+            const textCanvas = document.createElement('canvas');
+            const textCtx = textCanvas.getContext('2d');
+            textCanvas.width = 500;
+            textCanvas.height = 150;
+            
+            textCtx.fillStyle = 'white';
+            textCtx.font = `bold ${size}px Arial`;
+            textCtx.textAlign = 'center';
+            textCtx.textBaseline = 'middle';
+            textCtx.fillText(text, textCanvas.width / 2, textCanvas.height / 2);
+            
+            const imageData = textCtx.getImageData(0, 0, textCanvas.width, textCanvas.height);
+            const data = imageData.data;
+            
+            const step = 3; // Уменьшаем шаг для большего количества точек
+            for (let y = 0; y < textCanvas.height; y += step) {
+                for (let x = 0; x < textCanvas.width; x += step) {
+                    const index = (y * textCanvas.width + x) * 4;
+                    if (data[index + 3] > 128) {
+                        const pointX = centerX - 250 + x;
+                        const pointY = centerY - 75 + y;
+                        points.push({ x: pointX, y: pointY });
+                    }
+                }
+            }
+            
+            return points;
+        }
+        
+        const DIRECTIONS = ['top', 'bottom', 'left', 'right', 
+                          'top-left', 'top-right', 'bottom-left', 'bottom-right'];
+        
+        let particles = [];
+        let animationId = null;
+        
+        function initParticles() {
+            particles = [];
+            const mathPoints = createTextPoints('Meth', 150);
+            const codePoints = createTextPoints('Vibe Code');
+            const artPoints = createTextPoints('Degenerative', 70);
+            
+            // Проверяем, что точек достаточно
+            console.log(`Math точек: ${mathPoints.length}, Code точек: ${codePoints.length}, Art точек: ${artPoints.length}`);
+            
+            if (artPoints.length === 0) {
+                console.error("Нет точек для слова Art!");
+                // Создаем резервные точки
+                const backupPoints = [];
+                for (let i = 0; i < 100; i++) {
+                    backupPoints.push({ 
+                        x: canvas.width/2 + (Math.random() - 0.5) * 100, 
+                        y: canvas.height/2 + (Math.random() - 0.5) * 100 
+                    });
+                }
+                artPoints.push(...backupPoints);
+            }
+            
+            for (let i = 0; i < PARTICLE_COUNT; i++) {
+                const direction = DIRECTIONS[Math.floor(Math.random() * DIRECTIONS.length)];
+                let x, y;
+                
+                switch(direction) {
+                    case 'top': x = Math.random() * canvas.width; y = -50; break;
+                    case 'bottom': x = Math.random() * canvas.width; y = canvas.height + 50; break;
+                    case 'left': x = -50; y = Math.random() * canvas.height; break;
+                    case 'right': x = canvas.width + 50; y = Math.random() * canvas.height; break;
+                    case 'top-left': x = -50; y = -50; break;
+                    case 'top-right': x = canvas.width + 50; y = -50; break;
+                    case 'bottom-left': x = -50; y = canvas.height + 50; break;
+                    case 'bottom-right': x = canvas.width + 50; y = canvas.height + 50; break;
+                }
+                
+                const particle = new Particle(x, y, direction, i);
+                
+                // Убеждаемся, что есть точки для распределения
+                if (mathPoints.length > 0) {
+                    const mathIndex = i % mathPoints.length;
+                    particle.setMathTarget(mathPoints[mathIndex].x, mathPoints[mathIndex].y);
+                }
+                
+                if (codePoints.length > 0) {
+                    const codeIndex = i % codePoints.length;
+                    particle.setCodeTarget(codePoints[codeIndex].x, codePoints[codeIndex].y);
+                }
+                
+                if (artPoints.length > 0) {
+                    const artIndex = i % artPoints.length;
+                    particle.setArtTarget(artPoints[artIndex].x, artPoints[artIndex].y);
+                }
+                
+                particles.push(particle);
+            }
+            
+            currentPhase = PHASES.FLYING;
+            phaseStartFrame = animationFrameCount;
+            awaitingClick = false;
+        }
+        
+        function nextPhase() {
+            console.log(`Переход от фазы ${PHASE_NAMES[currentPhase]} к ${PHASE_NAMES[currentPhase + 1]}`);
+            currentPhase++;
+            phaseStartFrame = animationFrameCount;
+            
+            if (currentPhase === PHASES.ART_HOLD) {
+                awaitingClick = true;
+                // Принудительно устанавливаем частицы на их позиции Art
+                particles.forEach(p => {
+                    if (p.artTarget && p.artTarget.x !== undefined && p.artTarget.y !== undefined) {
+                        p.x = p.artTarget.x;
+                        p.y = p.artTarget.y;
+                    } else {
+                        // Если нет цели Art, ставим в центр
+                        p.x = canvas.width / 2;
+                        p.y = canvas.height / 2;
+                    }
+                    p.vx = 0;
+                    p.vy = 0;
+                    p.stuck = true;
+                    p.artStuck = true;
+                });
+                console.log("Анимация остановлена на слове Art. Кликните для перезапуска.");
+            }
+        }
+        
+        // Функция для сохранения кадра
+        function saveFrame() {
+            if (!isRecording || animationFrameCount % frameSkip !== 0) {
+                return;
+            }
+            
+            // Создаем Data URL из canvas
+            const imageData = canvas.toDataURL('image/png');
+            
+            // Сохраняем в массив
+            recordedFrames.push({
+                frame: frameNumber,
+                data: imageData,
+                filename: `image_${frameNumber.toString().padStart(5, '0')}.png`,
+                frameCount: animationFrameCount
+            });
+            
+            frameNumber++;
+            frameCountDisplay.textContent = frameNumber;
+            
+            // Показываем уведомление для первых нескольких кадров
+            if (frameNumber <= 10) {
+                console.log(`Сохранен кадр ${frameNumber} (итерация ${animationFrameCount}): ${recordedFrames[recordedFrames.length - 1].filename}`);
+            }
+        }
+        
+        // Функция для скачивания одного файла
+        function downloadFile(dataUrl, filename) {
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+        
+        // Функция для скачивания всех кадров
+        async function downloadAllFrames() {
+            if (recordedFrames.length === 0) {
+                alert('Нет сохраненных кадров для скачивания');
+                return;
+            }
+            
+            const confirmed = confirm(`Скачать ${recordedFrames.length} кадров? Это может занять некоторое время.`);
+            if (!confirmed) return;
+            
+            startRecordingBtn.disabled = true;
+            stopRecordingBtn.disabled = true;
+            downloadAllBtn.disabled = true;
+            
+            // Создаем ZIP архив
+            const JSZip = window.JSZip;
+            if (!JSZip) {
+                // Если JSZip не загружен, скачиваем по одному
+                alert('Библиотека JSZip не найдена. Кадры будут скачаны по одному.');
+                for (const frame of recordedFrames) {
+                    downloadFile(frame.data, frame.filename);
+                    // Небольшая задержка, чтобы избежать проблем с браузером
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+            } else {
+                try {
+                    const zip = new JSZip();
+                    
+                    // Добавляем каждый кадр в архив
+                    for (const frame of recordedFrames) {
+                        // Конвертируем Data URL в blob
+                        const response = await fetch(frame.data);
+                        const blob = await response.blob();
+                        zip.file(frame.filename, blob);
+                    }
+                    
+                    // Генерируем и скачиваем архив
+                    const content = await zip.generateAsync({type: "blob"});
+                    const url = URL.createObjectURL(content);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = `animation_frames_${Date.now()}.zip`;
+                    document.body.appendChild(a);
+                    a.click();
+                    document.body.removeChild(a);
+                    URL.revokeObjectURL(url);
+                    
+                    console.log(`Архив с ${recordedFrames.length} кадрами успешно создан`);
+                } catch (error) {
+                    console.error('Ошибка при создании архива:', error);
+                    alert('Ошибка при создании архива. Кадры будут скачаны по одному.');
+                    
+                    // Резервный вариант: скачать по одному
+                    for (const frame of recordedFrames.slice(0, 100)) { // Ограничим первые 100 кадров
+                        downloadFile(frame.data, frame.filename);
+                        await new Promise(resolve => setTimeout(resolve, 50));
+                    }
+                }
+            }
+            
+            startRecordingBtn.disabled = false;
+            stopRecordingBtn.disabled = false;
+            downloadAllBtn.disabled = false;
+        }
+        
+        function animate(currentTime) {
+            // Управление FPS
+            if (currentTime - lastFrameTime < frameInterval) {
+                animationId = requestAnimationFrame(animate);
+                return;
+            }
+            
+            lastFrameTime = currentTime;
+            
+            // Обновляем FPS из настроек
+            fps = parseInt(fpsInput.value) || 60;
+            frameInterval = 1000 / fps;
+            
+            // Обновляем frameSkip из настроек
+            frameSkip = parseInt(frameSkipInput.value) || 1;
+            
+            // Вычисляем сколько кадров прошло с начала текущей фазы
+            const phaseFrame = animationFrameCount - phaseStartFrame;
+            
+            // Обновляем отображение статуса
+            currentFrameDisplay.textContent = animationFrameCount;
+            currentPhaseDisplay.textContent = PHASE_NAMES[currentPhase];
+            
+            // Переход по таймеру (кроме фазы Art_Hold)
+            if (currentPhase !== PHASES.ART_HOLD && phaseFrame > PHASE_DURATIONS_FRAMES[currentPhase]) {
+                nextPhase();
+            }
+            
+            // Очищаем канвас
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.07)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            
+            // Обновляем и рисуем частицы
+            particles.forEach(particle => {
+                particle.update(animationFrameCount, phaseFrame);
+                particle.draw();
+            });
+            
+            // Сохраняем кадр, если идет запись
+            saveFrame();
+            
+            // Увеличиваем счетчик кадров
+            animationFrameCount++;
+            
+            if (animationRunning) {
+                animationId = requestAnimationFrame(animate);
+            }
+        }
+        
+        function startAnimation() {
+            animationRunning = true;
+            animationFrameCount = 0;
+            phaseStartFrame = 0;
+            currentPhase = PHASES.FLYING;
+            awaitingClick = false;
+            console.log("Анимация запущена, начиная с фазы FLYING");
+            lastFrameTime = performance.now();
+            animate(lastFrameTime);
+        }
+        
+        function restartAnimation() {
+            if (animationId) {
+                cancelAnimationFrame(animationId);
+                animationId = null;
+            }
+            
+            animationRunning = false;
+            initParticles();
+            ctx.fillStyle = '#0f172a';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+            startAnimation();
+        }
+        
+        // Обработчики кнопок записи
+        startRecordingBtn.addEventListener('click', () => {
+            if (!isRecording) {
+                isRecording = true;
+                recordedFrames = [];
+                frameNumber = 0;
+                startRecordingBtn.disabled = true;
+                startRecordingBtn.classList.add('recording');
+                stopRecordingBtn.disabled = false;
+                recordingStatus.style.display = 'block';
+                frameCountDisplay.textContent = '0';
+                console.log('Начало записи кадров...');
+            }
+        });
+        
+        stopRecordingBtn.addEventListener('click', () => {
+            if (isRecording) {
+                isRecording = false;
+                startRecordingBtn.disabled = false;
+                startRecordingBtn.classList.remove('recording');
+                stopRecordingBtn.disabled = true;
+                console.log(`Запись остановлена. Сохранено ${recordedFrames.length} кадров`);
+                
+                if (recordedFrames.length > 0) {
+                    downloadAllBtn.disabled = false;
+                }
+            }
+        });
+        
+        downloadAllBtn.addEventListener('click', downloadAllFrames);
+        
+        // Загружаем JSZip для создания ZIP архивов
+        function loadJSZip() {
+            return new Promise((resolve, reject) => {
+                if (window.JSZip) {
+                    resolve();
+                    return;
+                }
+                
+                const script = document.createElement('script');
+                script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+                script.onload = resolve;
+                script.onerror = () => {
+                    console.warn('Не удалось загрузить JSZip. Архив будет создан без него.');
+                    resolve();
+                };
+                document.head.appendChild(script);
+            });
+        }
+        
+        window.addEventListener('load', () => {
+            // Загружаем JSZip
+            loadJSZip().then(() => {
+                initParticles();
+                startAnimation();
+                downloadAllBtn.disabled = true;
+            });
+        });
+        
+        canvas.addEventListener('click', () => {
+            if (awaitingClick) {
+                console.log("Клик получен, перезапуск анимации");
+                restartAnimation();
+            } else {
+                console.log("Клик получен, но анимация еще не на Art. Текущая фаза:", PHASE_NAMES[currentPhase]);
+            }
+        });
+        
+        canvas.addEventListener('mousemove', (e) => {
+            if ([PHASES.SPIRAL_FORMATION, PHASES.SPIRAL_ROTATION].includes(currentPhase) && !awaitingClick) {
+                const mouseX = e.clientX;
+                const mouseY = e.clientY;
+                
+                particles.forEach(particle => {
+                    const dx = particle.x - mouseX;
+                    const dy = particle.y - mouseY;
+                    const distance = Math.sqrt(dx * dx + dy * dy);
+                    
+                    if (distance < 200) {
+                        particle.vx += (dx / distance) * 0.2;
+                        particle.vy += (dy / distance) * 0.2;
+                    }
+                });
+            }
+        });
+    </script>
+</body>
+</html>
